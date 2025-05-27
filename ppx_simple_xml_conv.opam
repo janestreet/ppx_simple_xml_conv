@@ -28,5 +28,5 @@ Part of the Jane Street's PPX rewriters collection.
 
     This ppx allows you to parse ocaml types to and from
     Simple_xml.element, with namespace support.
-
+  
 "
