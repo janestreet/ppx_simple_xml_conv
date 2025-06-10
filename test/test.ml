@@ -323,8 +323,9 @@ module _ = struct
       {|
       (Ok 1)
       (Ok 2)
-      (Error (Failure "Ppx_simple_xml_conv: extra attributes: a"))
-      (Error (Failure "Ppx_simple_xml_conv: extra attributes: a[namespace=foo]"))
+      (Error (Failure "Ppx_simple_xml_conv, at [a]: extra attributes: a"))
+      (Error
+       (Failure "Ppx_simple_xml_conv, at [a]: extra attributes: a[namespace=foo]"))
       |}]
   ;;
 end
@@ -1056,5 +1057,288 @@ module%test Functor = struct
       |}];
     xml_of_t t |> t_of_xml |> sexp_of_t |> print_s;
     [%expect {| ((string string) (int 1) (float 1)) |}]
+  ;;
+end
+
+module%test Check_parsing_errors = struct
+  open Expect_test_helpers_core
+
+  module Simple_record = struct
+    type t =
+      { name : (string[@xml.leaf "name"])
+      ; age : (int[@xml.leaf "age"])
+      }
+    [@@deriving sexp_of, of_xml ~tag:"person"]
+  end
+
+  let%expect_test "Missing required field" =
+    require_does_raise (fun () ->
+      Simple_xml.parse (`String {|<person><name>Alice</name></person>|})
+      |> Simple_record.t_of_xml);
+    [%expect
+      {|
+      (Failure
+       "Ppx_simple_xml_conv, at [person]: Expected 1 instance of age, got 0")
+      |}]
+  ;;
+
+  let%expect_test "Wrong tag name" =
+    require_does_raise (fun () ->
+      Simple_xml.parse (`String {|<user><name>Alice</name><age>30</age></user>|})
+      |> Simple_record.t_of_xml);
+    [%expect
+      {| (Failure "Ppx_simple_xml_conv, at []: Expected 1 instance of person, got 0") |}]
+  ;;
+
+  let%expect_test "Invalid integer parsing" =
+    require_does_raise (fun () ->
+      Simple_xml.parse
+        (`String {|<person><name>Alice</name><age>not_a_number</age></person>|})
+      |> Simple_record.t_of_xml);
+    [%expect
+      {|
+      (Failure
+       "Ppx_simple_xml_conv, at [person > age]: [of_string] raised when parsing element content: (Failure int_of_string)")
+      |}]
+  ;;
+
+  let%expect_test "Duplicate field" =
+    require_does_raise (fun () ->
+      Simple_xml.parse
+        (`String {|<person><name>Alice</name><name>Bob</name><age>30</age></person>|})
+      |> Simple_record.t_of_xml);
+    [%expect
+      {|
+      (Failure
+       "Ppx_simple_xml_conv, at [person]: Expected 1 instance of name, got 2")
+      |}]
+  ;;
+
+  module With_attributes = struct
+    type t =
+      { id : int [@xml.attribute "id"]
+      ; name : (string[@xml.leaf "name"])
+      }
+    [@@deriving sexp_of, of_xml ~tag:"item"]
+  end
+
+  let%expect_test "Missing required attribute" =
+    require_does_raise (fun () ->
+      Simple_xml.parse (`String {|<item><name>Test</name></item>|})
+      |> With_attributes.t_of_xml);
+    [%expect {| (Failure "Ppx_simple_xml_conv, at [item]: Attribute id missing") |}]
+  ;;
+
+  let%expect_test "Invalid attribute type" =
+    require_does_raise (fun () ->
+      Simple_xml.parse (`String {|<item id="abc"><name>Test</name></item>|})
+      |> With_attributes.t_of_xml);
+    [%expect
+      {|
+      (Failure
+       "Ppx_simple_xml_conv, at [item]: [of_string] raised when parsing the value of attribute \"id\": (Failure int_of_string)")
+      |}]
+  ;;
+
+  let%expect_test "Extra unexpected attributes" =
+    require_does_raise (fun () ->
+      Simple_xml.parse (`String {|<item id="123" extra="value"><name>Test</name></item>|})
+      |> With_attributes.t_of_xml);
+    [%expect {| (Failure "Ppx_simple_xml_conv, at [item]: extra attributes: extra") |}]
+  ;;
+
+  module Simple_variant = struct
+    type t =
+      | A of (int[@xml.leaf "value"])
+      | B of (string[@xml.leaf "text"])
+    [@@deriving sexp_of, xml]
+  end
+
+  let%expect_test "Unknown variant constructor" =
+    require_does_raise (fun () ->
+      Simple_xml.parse (`String {|<C><value>123</value></C>|}) |> Simple_variant.t_of_xml);
+    [%expect
+      {|
+      (Failure
+       "Ppx_simple_xml_conv, at []: Expected 1 instance of value or text, got 0")
+      |}]
+  ;;
+
+  let%expect_test "Variant with wrong inner structure" =
+    require_does_raise (fun () ->
+      Simple_xml.parse (`String {|<A><wrong_field>123</wrong_field></A>|})
+      |> Simple_variant.t_of_xml);
+    [%expect
+      {|
+      (Failure
+       "Ppx_simple_xml_conv, at []: Expected 1 instance of value or text, got 0")
+      |}]
+  ;;
+
+  module With_text_content = struct
+    type t =
+      { id : int [@xml.attribute "id"]
+      ; content : string [@xml.text]
+      }
+    [@@deriving sexp_of, of_xml ~tag:"message"]
+  end
+
+  let%expect_test "Mixed content with elements not allowed" =
+    require_does_raise (fun () ->
+      Simple_xml.parse (`String {|<message id="1">Hello <extra>world</extra></message>|})
+      |> With_text_content.t_of_xml);
+    [%expect
+      {|
+      (Failure
+       "Ppx_simple_xml_conv, at [message]: Expected a single text node, got child elements, tag: message, children: ((Text\"Hello \")(Element((tag((tag extra)))(children((Text world))))))")
+      |}]
+  ;;
+
+  module Nested_structure = struct
+    module Inner = struct
+      type t = { value : (int[@xml.leaf "val"]) }
+      [@@deriving sexp_of, of_xml ~tag:"inner"]
+    end
+
+    type t = { inner : Inner.t } [@@deriving sexp_of, of_xml ~tag:"outer"]
+  end
+
+  let%expect_test "Nested parsing error" =
+    require_does_raise (fun () ->
+      Simple_xml.parse (`String {|<outer><inner><val>not_int</val></inner></outer>|})
+      |> Nested_structure.t_of_xml);
+    [%expect
+      {|
+      (Failure
+       "Ppx_simple_xml_conv, at [outer > inner > val]: [of_string] raised when parsing element content: (Failure int_of_string)")
+      |}]
+  ;;
+
+  let%expect_test "Missing nested element" =
+    require_does_raise (fun () ->
+      Simple_xml.parse (`String {|<outer></outer>|}) |> Nested_structure.t_of_xml);
+    [%expect
+      {|
+      (Failure
+       "Ppx_simple_xml_conv, at [outer]: Expected 1 instance of inner, got 0")
+      |}]
+  ;;
+
+  module With_namespace_constraints = struct
+    type t = { field : (string[@xml.leaf "field" ~namespace:"http://example.com"]) }
+    [@@deriving sexp_of, of_xml ~tag:"root"]
+  end
+
+  let%expect_test "Wrong namespace" =
+    require_does_raise (fun () ->
+      Simple_xml.parse (`String {|<root><field>value</field></root>|})
+      |> With_namespace_constraints.t_of_xml);
+    [%expect
+      {|
+      (Failure
+       "Ppx_simple_xml_conv, at [root]: Expected 1 instance of field[namespace=http://example.com], got 0")
+      |}]
+  ;;
+
+  let%expect_test "Namespace required but not provided" =
+    require_does_raise (fun () ->
+      Simple_xml.parse
+        (`String {|<root xmlns:ns="http://wrong.com"><ns:field>value</ns:field></root>|})
+      |> With_namespace_constraints.t_of_xml);
+    [%expect
+      {|
+      (Failure
+       "Ppx_simple_xml_conv, at [root]: Expected 1 instance of field[namespace=http://example.com], got 0")
+      |}]
+  ;;
+
+  module With_custom_converters = struct
+    let time_ns_of_timestamp timestamp =
+      Int63.of_string timestamp
+      |> Time_ns.Span.of_int63_seconds
+      |> Time_ns.of_span_since_epoch
+    ;;
+
+    type t =
+      { timestamp : Time_ns.Alternate_sexp.t
+           [@xml.attribute "ts" ~of_string:time_ns_of_timestamp]
+      }
+    [@@deriving sexp_of, of_xml ~tag:"event"]
+  end
+
+  let%expect_test "Custom converter failure" =
+    require_does_raise (fun () ->
+      Simple_xml.parse (`String {|<event ts="invalid_timestamp"></event>|})
+      |> With_custom_converters.t_of_xml);
+    [%expect
+      {|
+      (Failure
+       "Ppx_simple_xml_conv, at [event]: [of_string] raised when parsing the value of attribute \"ts\": (Failure \"Int.of_string: \\\"invalid_timestamp\\\"\")")
+      |}]
+  ;;
+
+  module Empty_element_errors = struct
+    type t =
+      | Empty [@xml.empty "empty"]
+      | With_data of (int[@xml.leaf "value"])
+    [@@deriving sexp_of, xml]
+  end
+
+  let%expect_test "Empty element with unexpected content" =
+    require_does_raise (fun () ->
+      Simple_xml.parse (`String {|<empty>unexpected content</empty>|})
+      |> Empty_element_errors.t_of_xml);
+    [%expect
+      {|
+      (Failure
+       "Ppx_simple_xml_conv, at [empty]: Expected empty tag, tag not empty: empty, contents: \"unexpected content\"")
+      |}]
+  ;;
+
+  let%expect_test "Empty element with child elements" =
+    require_does_raise (fun () ->
+      Simple_xml.parse (`String {|<empty><child/></empty>|})
+      |> Empty_element_errors.t_of_xml);
+    [%expect
+      {|
+      (Failure
+       "Ppx_simple_xml_conv: Expected a single text node, got child elements, tag: empty, children: ((Element((tag((tag child))))))")
+      |}]
+  ;;
+
+  module With_lifting_in_the_middle = struct
+    module Foo = struct
+      type t = { a : (int[@xml.leaf "a"]) } [@@deriving sexp_of, of_xml ~tag:"foo"]
+    end
+
+    module Bar = struct
+      module Xmlable = struct
+        type t = { foo : Foo.t } [@@deriving of_xml ~tag:"bar"]
+      end
+
+      type t = Foo.t [@@deriving sexp_of]
+
+      include
+        Ppx_simple_xml_conv_lib.Of_xml.Of_xmlable
+          (Xmlable)
+          (struct
+            type nonrec t = t
+
+            let of_xmlable { Xmlable.foo } = foo
+          end)
+    end
+
+    type t = { bar : Bar.t } [@@deriving sexp_of, of_xml ~tag:"root"]
+  end
+
+  let%expect_test "Lifting in the middle" =
+    require_does_raise (fun () ->
+      Simple_xml.parse (`String {|<root><bar><foo><a>x</a></foo></bar></root>|})
+      |> With_lifting_in_the_middle.t_of_xml);
+    [%expect
+      {|
+      (Failure
+       "Ppx_simple_xml_conv, at [root > bar > foo > a]: [of_string] raised when parsing element content: (Failure int_of_string)")
+      |}]
   ;;
 end
