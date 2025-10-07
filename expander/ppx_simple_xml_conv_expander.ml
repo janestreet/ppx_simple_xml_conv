@@ -1189,6 +1189,7 @@ module Deserializer = struct
           let parse_xml =
             [%expr
               Ppx_simple_xml_conv_lib.Of_xml.element
+                ?path_rev
                 [%e count]
                 [%e children_var]
                 [%e xml_description]]
@@ -1200,6 +1201,7 @@ module Deserializer = struct
             [%expr
               let value, rest =
                 Ppx_simple_xml_conv_lib.Of_xml.element
+                  ?path_rev
                   Option
                   [%e children_var]
                   (Ppx_simple_xml_conv_lib.Of_xml.empty_element
@@ -1220,7 +1222,8 @@ module Deserializer = struct
           let xml_description =
             xml_description_from_core_type type_ ~requested ~type_params ~inlined:true
           in
-          `Inlined, [%expr [%e xml_description] [%e children_var] [%e attributes_var]]
+          ( `Inlined
+          , [%expr [%e xml_description] ?path_rev [%e children_var] [%e attributes_var]] )
         | Content type_ ->
           (match parameters with
            | Inlined ->
@@ -1234,6 +1237,7 @@ module Deserializer = struct
                [%expr
                  [%e of_string]
                    (Ppx_simple_xml_conv_lib.Of_xml.extract_text
+                      ?path_rev
                       ~tag:[%e tag]
                       [%e children_var])]
              in
@@ -1253,6 +1257,7 @@ module Deserializer = struct
           let parse_xml =
             [%expr
               Ppx_simple_xml_conv_lib.Of_xml.attribute
+                ?path_rev
                 [%e count]
                 [%e attributes_var]
                 ~of_string:[%e of_string]
@@ -1294,7 +1299,9 @@ module Deserializer = struct
             match struct_parser, allow_extra_elements with
             | Non_leaf _, false ->
               [%expr
-                Ppx_simple_xml_conv_lib.Of_xml.check_no_extra_children [%e children_var];
+                Ppx_simple_xml_conv_lib.Of_xml.check_no_extra_children
+                  ?path_rev
+                  [%e children_var];
                 [%e record]]
             | Leaf _, false | Non_leaf _, true -> record
             | Leaf { content; _ }, true ->
@@ -1309,7 +1316,9 @@ module Deserializer = struct
           then init
           else
             [%expr
-              Ppx_simple_xml_conv_lib.Of_xml.check_no_extra_attributes [%e attributes_var];
+              Ppx_simple_xml_conv_lib.Of_xml.check_no_extra_attributes
+                ?path_rev
+                [%e attributes_var];
               [%e init]]
       in
       let parse_attribute { Record_common.Named.content; _ } init =
@@ -1383,17 +1392,21 @@ module Deserializer = struct
           ~parameters
       in
       match parameters with
-      | Inlined -> [%expr fun [%p children_pattern] [%p attributes_pattern] -> [%e body]]
+      | Inlined ->
+        [%expr
+          fun ?(path_rev @ local) [%p children_pattern] [%p attributes_pattern] ->
+            [%e body]]
       | Tag { tag; namespace; allow_extra_elements = _; allow_extra_attributes = _ } ->
         [%expr
           Ppx_simple_xml_conv_lib.Of_xml.Element
             { tag = [%e tag]
             ; namespace = [%e Namespace.to_parser ~loc namespace]
             ; parse =
-                (fun { children = [%p children_pattern]
-                     ; attributes = [%p attributes_pattern]
-                     ; tag = _
-                     } ->
+                (fun ?(path_rev @ local)
+                  { children = [%p children_pattern]
+                  ; attributes = [%p attributes_pattern]
+                  ; tag = _
+                  } ->
                   [%e body])
             }]
     ;;
@@ -1442,7 +1455,9 @@ module Deserializer = struct
               Builder.eapply (Builder.evar ~loc description_name) type_param_values ~loc
             in
             let parse_without_type_params =
-              [%expr fun xml -> Ppx_simple_xml_conv_lib.Of_xml.parse [%e description] xml]
+              [%expr
+                fun xml ->
+                  Ppx_simple_xml_conv_lib.Of_xml.parse ~path_rev:[] [%e description] xml]
             in
             Builder.eabstract ~loc type_param_patterns parse_without_type_params
           in

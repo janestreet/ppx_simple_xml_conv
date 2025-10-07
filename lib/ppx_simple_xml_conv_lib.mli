@@ -22,7 +22,7 @@ module Of_xml : sig
   type 'a element =
     { tag : string
     ; namespace : Namespace.t
-    ; parse : Xml.element -> 'a
+    ; parse : ?path_rev:Xml.Tag.t list @ local -> Xml.element -> 'a
     }
 
   (** This defines a parser for a data type from an XML element. The parser can be for
@@ -73,13 +73,27 @@ module Of_xml : sig
   end
 
   type 'a inlined =
-    Xml.element Element_container.t
+    ?path_rev:Xml.Tag.t list @ local
+    -> Xml.element Element_container.t
     -> Xml.Attribute.t list
     -> 'a * Xml.element Element_container.t * Xml.Attribute.t list
 
+  val parse_failure
+    :  ?path_rev:Xml.Tag.t list @ local
+    -> (('a, unit, string, 'b) format4 -> 'a)
+
   val flatten_variants : 'a parser_and_constructor list -> 'a t
-  val check_no_extra_children : Xml.element Element_container.t -> unit
-  val check_no_extra_attributes : Xml.Attribute.t list -> unit
+
+  val check_no_extra_children
+    :  ?path_rev:Xml.Tag.t list @ local
+    -> Xml.element Element_container.t
+    -> unit
+
+  val check_no_extra_attributes
+    :  ?path_rev:Xml.Tag.t list @ local
+    -> Xml.Attribute.t list
+    -> unit
+
   val elements_only : Xml.t list -> Xml.element Element_container.t
 
   val leaf
@@ -97,13 +111,19 @@ module Of_xml : sig
     -> string
     -> unit t
 
-  val extract_text : ?preserve_space:bool -> tag:string -> Xml.t list -> string
+  val extract_text
+    :  ?path_rev:Xml.Tag.t list @ local
+    -> ?preserve_space:bool
+    -> tag:string
+    -> Xml.t list
+    -> string
 
   (** Extracts the required elements from the given element list that fit the given
       parser, and returns the unused elements. The number of matching elements must
       respect the given element count, and the parser would fail otherwise. *)
   val element
-    :  ('input, 'output) Element_count.t
+    :  ?path_rev:Xml.Tag.t list @ local
+    -> ('input, 'output) Element_count.t
     -> Xml.element Element_container.t
     -> 'input t
     -> 'output * Xml.element Element_container.t
@@ -112,22 +132,23 @@ module Of_xml : sig
       key, and returns the unused attributes. The number of matching attributes (0 or 1)
       must respect the given attribute count, and the parser would fail otherwise. *)
   val attribute
-    :  ('input, 'output) Attribute_count.t
+    :  ?path_rev:Xml.Tag.t list @ local
+    -> ('input, 'output) Attribute_count.t
     -> Xml.Attribute.t list
     -> of_string:(string -> 'input)
     -> namespace:Namespace.t
     -> key:string
     -> 'output * Xml.Attribute.t list
 
-  val parse : 'a t -> Xml.element -> 'a
+  val parse : ?path_rev:Xml.Tag.t list @ local -> 'a t -> Xml.element -> 'a
 
   val override_parse
     :  'a t
     -> f:
          (namespace:Namespace.t
           -> tag:string
-          -> (Xml.element -> 'a)
-          -> (Xml.element -> 'b))
+          -> (?path_rev:Xml.Tag.t list @ local -> Xml.element -> 'a)
+          -> (?path_rev:Xml.Tag.t list @ local -> Xml.element -> 'b))
     -> 'b t
 
   include module type of

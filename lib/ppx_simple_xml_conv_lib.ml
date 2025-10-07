@@ -20,7 +20,7 @@ module Of_xml = struct
   type 'a element =
     { tag : string
     ; namespace : Namespace.t
-    ; parse : Xml.element -> 'a
+    ; parse : ?path_rev:Xml.Tag.t list @ local -> Xml.element -> 'a
     }
 
   type 'a t =
@@ -99,40 +99,68 @@ module Of_xml = struct
   end
 
   type 'a inlined =
-    Xml.element Element_container.t
+    ?path_rev:Xml.Tag.t list @ local
+    -> Xml.element Element_container.t
     -> Xml.Attribute.t list
     -> 'a * Xml.element Element_container.t * Xml.Attribute.t list
 
-  let with_ns ~ns value =
+  let add_to_path (path @ local) tag = exclave_
+    match path with
+    | None -> None
+    | Some path -> Some (tag :: path)
+  ;;
+
+  let%template[@mode m = (local, global)] with_ns ~(ns @ m) (value @ m) =
     match ns with
     | "" -> value
     | ns -> [%string "%{value}[namespace=%{ns}]"]
   ;;
 
-  let check_no_extra_attributes attributes : unit =
+  let rec rev_map_local ~(acc @ local) ~(f @ local) = function
+    | [] -> acc
+    | v :: rest -> exclave_ rev_map_local ~acc:(f v :: acc) ~f rest
+  ;;
+
+  let parse_failure ?(path_rev @ local) =
+    let path =
+      match path_rev with
+      | None -> ""
+      | Some path ->
+        let path =
+          rev_map_local
+            ~acc:[]
+            ~f:(fun (tag : Xml.Tag.t) -> exclave_
+              (with_ns [@mode local]) ~ns:tag.ns tag.tag)
+            path
+          |> String.concat ~sep:" > "
+        in
+        sprintf ", at [%s]" path
+    in
+    Printf.ksprintf (fun message -> failwithf "Ppx_simple_xml_conv%s: %s" path message ())
+  ;;
+
+  let check_no_extra_attributes ?(path_rev @ local) attributes : unit =
     let extra_attributes =
       List.filter attributes ~f:(fun attribute ->
         not (String.equal attribute.Xml.Attribute.ns Xmlm.ns_xmlns))
     in
     if not (List.is_empty extra_attributes)
     then
-      failwithf
-        "Ppx_simple_xml_conv: extra attributes: %s"
+      (parse_failure ?path_rev)
+        "extra attributes: %s"
         (List.map extra_attributes ~f:(fun attribute ->
            with_ns ~ns:attribute.ns attribute.key)
          |> String.concat ~sep:", ")
-        ()
   ;;
 
-  let check_no_extra_children children : unit =
+  let check_no_extra_children ?(path_rev @ local) children : unit =
     if not (Element_container.is_empty children)
     then
-      failwithf
-        "Ppx_simple_xml_conv: extra elements: %s"
+      (parse_failure ?path_rev)
+        "extra elements: %s"
         (Element_container.map_into_list children ~f:(fun { Xml.tag; _ } ->
            with_ns ~ns:tag.ns tag.tag)
          |> String.concat ~sep:", ")
-        ()
   ;;
 
   let elements_only (xmls : Xml.t list) =
@@ -150,7 +178,7 @@ module Of_xml = struct
         -> 'output parser_and_constructor
 
   let flatten_variants parsers_and_constructors =
-    let lift_parse parse ~f element = parse element |> f in
+    let lift_parse parse ~f ?(path_rev @ local) element = parse ?path_rev element |> f in
     let parsers =
       lazy
         (List.concat_map
@@ -170,23 +198,23 @@ module Of_xml = struct
     Element
       { tag
       ; parse =
-          (fun element ->
-            let result = f element.children in
-            if not ignore_attributes then check_no_extra_attributes element.attributes;
+          (fun ?(path_rev @ local) element ->
+            let result = f ?path_rev element.children in
+            if not ignore_attributes
+            then check_no_extra_attributes ?path_rev element.attributes;
             result)
       ; namespace
       }
   ;;
 
-  let extract_text ?(preserve_space = false) ~tag = function
+  let extract_text ?(path_rev @ local) ?(preserve_space = false) ~tag = function
     | [] -> ""
     | [ Xml.Text text ] -> if preserve_space then text else String.strip text
     | children ->
-      raise_s
-        [%message
-          "Did not expect child elements, got child elements"
-            (tag : string)
-            (children : Xml.t list)]
+      (parse_failure ?path_rev)
+        "Expected a single text node, got child elements, tag: %s, children: %s"
+        tag
+        ([%sexp_of: Xml.t list] children |> Sexp.to_string)
   ;;
 
   let leaf
@@ -196,8 +224,17 @@ module Of_xml = struct
     tag
     ~of_string
     =
-    simple_convert ~namespace ?ignore_attributes tag ~f:(fun children ->
-      extract_text ?preserve_space ~tag children |> of_string)
+    simple_convert
+      ~namespace
+      ?ignore_attributes
+      tag
+      ~f:(fun ?(path_rev @ local) children ->
+        let text = extract_text ?path_rev ?preserve_space ~tag children in
+        try of_string text with
+        | exn ->
+          (parse_failure ?path_rev)
+            "[of_string] raised when parsing element content: %s"
+            (Exn.to_string exn))
   ;;
 
   let empty_element
@@ -212,50 +249,49 @@ module Of_xml = struct
       tag
       ~f:
         (if ignore_children
-         then (ignore : Xml.t list -> unit)
+         then fun ?path_rev:_ (_ : Xml.t list) -> ()
          else
-           fun children ->
+           fun ?(path_rev @ local) children ->
            match extract_text ~tag children with
            | "" -> ()
            | contents ->
-             raise_s
-               [%message
-                 "Expected empty tag, tag not empty" (tag : string) (contents : string)])
+             (parse_failure ?path_rev)
+               "Expected empty tag, tag not empty: %s, contents: %S"
+               tag
+               contents)
   ;;
 
   let with_element_count
     (type input output)
     (count : (input, output) Element_count.t)
     ~element_description
+    ~(path_rev @ local)
     matching
-    ~(f : _ -> input)
+    ~(f : ?path_rev:_ @ local -> _ -> input)
     : output
     =
     match count, matching with
-    | Required, [ child ] -> f child
+    | Required, [ child ] -> f ?path_rev child [@nontail]
     | Required, matching ->
-      failwithf
-        "Ppx_simple_xml_conv: Expected 1 instance of %s, got %d"
+      (parse_failure ?path_rev)
+        "Expected 1 instance of %s, got %d"
         (Lazy.force element_description)
         (List.length matching)
-        ()
     | Option, [] -> None
-    | Option, [ child ] -> Some (f child)
+    | Option, [ child ] -> Some (f ?path_rev child)
     | Option, matching ->
-      failwithf
-        "Ppx_simple_xml_conv: Expected 0 or 1 instances of %s, got %d"
+      (parse_failure ?path_rev)
+        "Expected 0 or 1 instances of %s, got %d"
         (Lazy.force element_description)
         (List.length matching)
-        ()
-    | List, children -> List.map children ~f
+    | List, children -> List.map children ~f:(fun child -> f ?path_rev child) [@nontail]
     | Default default, [] -> default
-    | Default _, [ child ] -> f child
+    | Default _, [ child ] -> f ?path_rev child
     | Default _, matching ->
-      failwithf
-        "Ppx_simple_xml_conv: Expected 0 or 1 instances of %s, got %d"
+      (parse_failure ?path_rev)
+        "Expected 0 or 1 instances of %s, got %d"
         (Lazy.force element_description)
         (List.length matching)
-        ()
   ;;
 
   let description ~tag ~namespace =
@@ -265,7 +301,7 @@ module Of_xml = struct
     | Assert_equals ns -> [%string "%{tag}[namespace=%{ns}]"]
   ;;
 
-  let variant_parser count parsers elements =
+  let variant_parser ?(path_rev @ local) count parsers elements =
     let element_description =
       lazy
         (List.map parsers ~f:(fun parser ->
@@ -281,13 +317,18 @@ module Of_xml = struct
     in
     let matching = Element_container.extract_map elements ~f:find_parser in
     let parsed =
-      with_element_count count ~element_description matching ~f:(fun (parse, element) ->
-        parse element)
+      with_element_count
+        ~path_rev
+        count
+        ~element_description
+        matching
+        ~f:(fun ?path_rev (parse, element) ->
+          parse ?path_rev:(add_to_path path_rev element.tag) element [@nontail])
     in
     parsed, elements
   ;;
 
-  let element count children (converter : 'input t)
+  let element ?(path_rev @ local) count children (converter : 'input t)
     : 'output * Xml.element Element_container.t
     =
     match converter with
@@ -299,13 +340,15 @@ module Of_xml = struct
       in
       let parsed =
         with_element_count
+          ~path_rev
           count
           ~element_description:(lazy (description ~tag ~namespace))
           matching
-          ~f:parse
+          ~f:(fun ?path_rev element ->
+            parse ?path_rev:(add_to_path path_rev element.tag) element [@nontail])
       in
       parsed, children
-    | Variant tags -> variant_parser count (Lazy.force tags) children
+    | Variant tags -> variant_parser ?path_rev count (Lazy.force tags) children
   ;;
 
   let extract_attribute attributes key_to_extract ~namespace =
@@ -321,6 +364,7 @@ module Of_xml = struct
 
   let attribute
     (type input output)
+    ?(path_rev @ local)
     (count : (input, output) Attribute_count.t)
     attributes
     ~(of_string : string -> input)
@@ -328,23 +372,34 @@ module Of_xml = struct
     ~key
     =
     let attribute, rest = extract_attribute attributes key ~namespace in
-    let parse attribute = of_string attribute.Xml.Attribute.value in
+    let parse attribute =
+      try of_string attribute.Xml.Attribute.value with
+      | exn ->
+        (parse_failure ?path_rev)
+          "[of_string] raised when parsing the value of attribute %S: %s"
+          (with_ns attribute.key ~ns:attribute.ns)
+          (Exn.to_string exn)
+    in
     let parsed : output =
       match count, attribute with
       | Required, Some attribute -> parse attribute
-      | Required, None -> failwithf "Ppx_simple_xml_conv: Attribute %s missing" key ()
+      | Required, None ->
+        (parse_failure ?path_rev) "Attribute %s missing" (description ~tag:key ~namespace)
       | Option, attribute -> Option.map attribute ~f:parse
       | Default default, attribute -> Option.value_map attribute ~default ~f:parse
     in
     parsed, rest
   ;;
 
-  let parse t element_to_parse =
-    element Required (Element_container.return element_to_parse) t |> fst
+  let parse ?(path_rev @ local) t element_to_parse =
+    element ?path_rev Required (Element_container.return element_to_parse) t |> fst
   ;;
 
   let lift_element (element_parser : 'a element) ~f =
-    { element_parser with parse = (fun element -> element_parser.parse element |> f) }
+    { element_parser with
+      parse =
+        (fun ?(path_rev @ local) element -> element_parser.parse ?path_rev element |> f)
+    }
   ;;
 
   let lift (t : 'a t) ~f =
@@ -356,8 +411,8 @@ module Of_xml = struct
          List.map variants ~f:(lift_element ~f))
   ;;
 
-  let lift_inlined (inlined : 'a inlined) ~f container attributes =
-    let result, container, attributes = inlined container attributes in
+  let lift_inlined (inlined : 'a inlined) ~f ?(path_rev @ local) container attributes =
+    let result, container, attributes = inlined ?path_rev container attributes in
     f result, container, attributes
   ;;
 
