@@ -81,8 +81,8 @@ let declare
     then
       expression
       ||| map __ ~f:(fun expression_to_result expression ->
-        (* This just transforms the expression to look like
-           it was applied with 0 arguments. *)
+        (* This just transforms the expression to look like it was applied with 0
+           arguments. *)
         expression_to_result expression [])
     else expression
   in

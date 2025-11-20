@@ -2,13 +2,13 @@ open! Base
 open! Ppxlib
 module Builder = Ppxlib.Ast_builder.Default
 
-(* Same as combinator_type_of_type_declaration except the return type doesn't
-   have to be the same as the type parameter type.
+(* Same as combinator_type_of_type_declaration except the return type doesn't have to be
+   the same as the type parameter type.
 
-   For example, we can use combinator_type_of_type_declaration to derive
-   xml_of_t for ['a t] because the type of that would be
-   [('a -> Xml.element) -> 'a t -> Xml.element], but we can't use it to deriving
-   t_of_xml because the type would be ['a Ppx_simple_xml_conv_lib.Of_xml.t -> Xml.element -> t].
+   For example, we can use combinator_type_of_type_declaration to derive xml_of_t for
+   ['a t] because the type of that would be [('a -> Xml.element) -> 'a t -> Xml.element],
+   but we can't use it to deriving t_of_xml because the type would be
+   ['a Ppx_simple_xml_conv_lib.Of_xml.t -> Xml.element -> t].
 *)
 let combinator_type_of_type_declaration_hybrid
   (type_declaration : type_declaration)
@@ -213,8 +213,8 @@ let rec process_core_type
   ~namer
   =
   let loc = { ty.ptyp_loc with loc_ghost = true } in
-  (* If we have a custom type parser (e.g. of_string), we don't care what the type
-     looks like. Otherwise: we just support type aliases for now. *)
+  (* If we have a custom type parser (e.g. of_string), we don't care what the type looks
+     like. Otherwise: we just support type aliases for now. *)
   match Attributes.Core_type.handle ty ~loc with
   | From_type ->
     (match Ppxlib_jane.Shim.Core_type_desc.of_parsetree ty.ptyp_desc with
@@ -271,8 +271,8 @@ let rec process_core_type
     make_empty loc ~tag ~ignore_children ~ignore_attributes ~namespace
 ;;
 
-(* Only records allow the ~tag, ~inlined, ~allow_extra_elements, and ~allow_extra_attributes
-   derivers. *)
+(* Only records allow the ~tag, ~inlined, ~allow_extra_elements, and
+   ~allow_extra_attributes derivers. *)
 let validate_non_record ~loc ~type_type = function
   | Parameters.No_parameters -> ()
   | Tag _ ->
@@ -508,8 +508,8 @@ let handle_type_declaration
     =
     type_declaration
   in
-  (* We rev map because we will fold later to add arguments, and we want
-     last argument first. *)
+  (* We rev map because we will fold later to add arguments, and we want last argument
+     first. *)
   let type_param_list =
     List.map ptype_params ~f:(fun param ->
       let name = get_type_param_name param in
@@ -542,8 +542,8 @@ let handle_type_declaration
 ;;
 
 let extract_type_declaration_and_recursion_flag ~loc (rec_flag, type_declarations) =
-  (* Check if the type is really recursive, else the compiler raises an error
-     about a redundant rec flag *)
+  (* Check if the type is really recursive, else the compiler raises an error about a
+     redundant rec flag *)
   let rec_flag = (new type_is_recursive rec_flag type_declarations)#go () in
   let type_declaration =
     match type_declarations with
@@ -1527,8 +1527,8 @@ module Deserializer = struct
   ;;
 
   let str_type_decl ~loc (rec_flag, type_declarations) ~requested ~parameters : structure =
-    (* Check if the type is really recursive, else the compiler raises an error
-       about a redundant rec flag *)
+    (* Check if the type is really recursive, else the compiler raises an error about a
+       redundant rec flag *)
     let rec_flag = (new type_is_recursive rec_flag type_declarations)#go () in
     let type_declaration =
       match type_declarations with
