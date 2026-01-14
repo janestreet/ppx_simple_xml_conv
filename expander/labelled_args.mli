@@ -43,9 +43,9 @@ type ('build_argument, 'argument) argument :=
 val declare
   :  ?allow_no_args:
        bool
-       (* [allow_no_args] also parses the function as is without any arguments.
-     There is a potential conflict here, if the applied function is also an apply,
-     it will catch everything. The target needs to not catch an apply. *)
+       (* [allow_no_args] also parses the function as is without any arguments. There is a
+          potential conflict here, if the applied function is also an apply, it will catch
+          everything. The target needs to not catch an apply. *)
   -> label
   -> 'context Attribute.Context.t
   -> (expression, 'apply -> 'apply, 'apply) Ast_pattern.t
@@ -77,6 +77,6 @@ val ( ^?-> )
 (** An empty list of arguments. To be used at the end of the argument chain. *)
 val ret : ('result, 'result) t
 
-(* If you want an optional argument that is just the label, (e.g. [allow_extra_blah]),
-   you can use this helper. *)
+(* If you want an optional argument that is just the label, (e.g. [allow_extra_blah]), you
+   can use this helper. *)
 val just_label : string -> (unit -> unit, unit) argument

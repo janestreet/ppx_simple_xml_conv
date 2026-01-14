@@ -792,8 +792,8 @@ module _ = struct
       ; timestamp : int
       }
 
-    (* Whatever custom logic on serialization/deserialization that applies
-       to all serializations. *)
+    (* Whatever custom logic on serialization/deserialization that applies to all
+       serializations. *)
     let xml_of_t xml_of_value { value; timestamp } =
       let element : Simple_xml.element = xml_of_value value in
       { element with
